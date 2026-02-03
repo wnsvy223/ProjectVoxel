@@ -17,7 +17,7 @@ public class FPSCameraController : MonoBehaviour
     public float sprintSpeed = 14f;
 
     [Tooltip("점프 힘")]
-    public float jumpForce = 7f;
+    public float jumpForce = 14f;
 
     [Tooltip("중력 가속도")]
     public float gravity = 20f;

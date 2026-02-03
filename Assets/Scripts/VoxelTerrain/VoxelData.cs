@@ -78,13 +78,14 @@ namespace VoxelTerrain
                         float density = Clamp(rawDist, -terrainAmplitude, terrainAmplitude);
                         density /= terrainAmplitude;
 
-                        // === 바닥 보장 (y=1~3은 항상 solid) ===
-                        if (y >= 1 && y <= 3)
-                            density = Max(density, 1.0f - (y - 1) * 0.33f);
+                        // === 바닥 보장 (y=1~8은 항상 solid) ===
+                        // 두꺼운 바닥층으로 땅굴 파기 시 무한 낙하 방지
+                        if (y >= 1 && y <= 8)
+                            density = Max(density, 1.0f - (y - 1) * 0.125f);
 
                         // === 볼류메트릭 경계면 생성 ===
                         // Marching Cubes는 density가 양→음 전환되는 곳에만 메쉬를 생성.
-                        // 경계를 음수(air)로 만들어 바닥면과 측면 벽 메쉬가 생기게 한다.
+                        // 경계를 음수(air)로 만들어 바닥면 메쉬가 생기게 한다.
 
                         // 바닥면: y=0을 air로 만들어 y≈0.5 위치에 바닥 메쉬 생성
                         if (y == 0)
@@ -94,11 +95,8 @@ namespace VoxelTerrain
                         if (y >= sizeY - 1)
                             density = Min(density, -0.5f);
 
-                        // 측면 벽: 월드 경계 청크의 가장자리를 air로 만들어 수직 벽 생성
-                        if (isEdgeMinX && x == 0) density = -1f;
-                        if (isEdgeMaxX && x == sizeX - 1) density = -1f;
-                        if (isEdgeMinZ && z == 0) density = -1f;
-                        if (isEdgeMaxZ && z == sizeZ - 1) density = -1f;
+                        // 측면 벽: isEdge 로직 제거! (Marching Cubes 보간 불일치로 틈 발생)
+                        // 옆면 벽은 별도의 Skirt mesh 방식으로 처리해야 함
 
                         densities[x, y, z] = density;
                     }

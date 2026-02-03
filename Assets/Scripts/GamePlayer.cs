@@ -11,7 +11,7 @@ public class GamePlayer : NetworkBehaviour
 {
     [Header("초기 위치")]
     [Tooltip("플레이어 시작 높이 (지형 위)")]
-    public float startHeight = 80f;
+    public float startHeight = 100f;
 
     private Camera playerCamera;
 
@@ -33,7 +33,7 @@ public class GamePlayer : NetworkBehaviour
             playerCamera.farClipPlane = 1000f;
 
             // 카메라를 플레이어 눈높이로 리셋 (CharacterController 높이 2m 기준)
-            playerCamera.transform.localPosition = Vector3.up * 1.6f;
+            playerCamera.transform.localPosition = Vector3.up * 10f;
             playerCamera.transform.localRotation = Quaternion.identity;
 
             AudioListener listener = playerCamera.GetComponent<AudioListener>();
@@ -66,6 +66,11 @@ public class GamePlayer : NetworkBehaviour
         // === 시작 위치 ===
         transform.position = new Vector3(0, startHeight, 0);
         transform.rotation = Quaternion.identity;
+
+        // === VoxelWorld에 플레이어 등록 (동적 청크 로딩용) ===
+        VoxelWorld vw = FindFirstObjectByType<VoxelWorld>();
+        if (vw != null)
+            vw.SetPlayer(transform);
     }
 
     public override void OnStartClient()

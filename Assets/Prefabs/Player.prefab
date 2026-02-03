@@ -368,6 +368,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::FPSCameraController
   moveSpeed: 10
   sprintSpeed: 40
+  jumpForce: 25
+  gravity: 20
   mouseSensitivity: 1
   pitchLimit: 70
 --- !u!114 &912444221818024940

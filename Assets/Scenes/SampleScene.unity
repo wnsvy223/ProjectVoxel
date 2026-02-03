@@ -400,15 +400,19 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::VoxelTerrain.VoxelWorld
   seed: 42
-  worldSizeInChunks: 4
   chunkSize: 32
-  chunkHeight: 64
+  chunkHeight: 36
   voxelSize: 1
   terrainFrequency: 0.008
-  terrainAmplitude: 20
+  terrainAmplitude: 35
   caveFrequency: 0.03
   caveThreshold: 0.35
   terrainMaterial: {fileID: 2100000, guid: 2cf1b306204d462498643d030af89051, type: 2}
+  viewDistance: 8
+  chunkCheckInterval: 0.3
+  unloadBuffer: 4
+  frameBudgetMs: 16
+  maxColliderUpdatesPerFrame: 3
 --- !u!4 &526538442
 Transform:
   m_ObjectHideFlags: 0

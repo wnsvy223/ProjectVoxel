@@ -25,6 +25,15 @@ namespace VoxelTerrain
         private MeshData cachedMeshData;
         private Color[] cachedColors;
 
+        // 청크 수정 추적
+        private bool isModified;
+        public bool IsModified => isModified;
+
+        // 경계 벽 관리
+        private GameObject[] wallObjects = new GameObject[4]; // MinX, MaxX, MinZ, MaxZ
+        private bool[] hasWall = new bool[4];
+        private int chunkSize; // 청크 한 변 복셀 수
+
         public void Initialize(Material material)
         {
             meshFilter = GetComponent<MeshFilter>();
@@ -51,9 +60,25 @@ namespace VoxelTerrain
             this.densities = densities;
             this.voxelSize = voxelSize;
             this.chunkHeight = chunkHeight;
+            this.chunkSize = densities.GetLength(0) - 1;
 
             RebuildMeshVisual();
             UpdateCollider();
+        }
+
+        /// <summary>
+        /// density 데이터와 설정값을 받아 시각적 메쉬만 생성한다 (콜라이더 지연).
+        /// 성능 최적화를 위해 콜라이더는 나중에 별도로 업데이트한다.
+        /// </summary>
+        public void BuildMeshDeferred(float[,,] densities, float voxelSize, int chunkHeight)
+        {
+            this.densities = densities;
+            this.voxelSize = voxelSize;
+            this.chunkHeight = chunkHeight;
+            this.chunkSize = densities.GetLength(0) - 1;
+
+            RebuildMeshVisual();
+            // 콜라이더는 나중에 VoxelWorld에서 큐를 통해 업데이트
         }
 
         /// <summary>
@@ -139,6 +164,7 @@ namespace VoxelTerrain
                             densities[x, y, z] += intensity * falloff;
                             densities[x, y, z] = Mathf.Clamp(densities[x, y, z], -1f, 1f);
                             modified = true;
+                            isModified = true; // 청크가 수정됨을 표시
                         }
                     }
                 }
@@ -149,6 +175,318 @@ namespace VoxelTerrain
 
         public float[,,] GetDensities() => densities;
         public float GetVoxelSize() => voxelSize;
+        public int GetChunkHeight() => chunkHeight;
+
+        /// <summary>
+        /// 외부 밀도 데이터를 설정하고 메시를 재빌드한다 (청크 복원용).
+        /// </summary>
+        public void SetDensities(float[,,] newDensities, float voxelSize, int chunkHeight, bool wasModified)
+        {
+            this.densities = newDensities;
+            this.voxelSize = voxelSize;
+            this.chunkHeight = chunkHeight;
+            this.isModified = wasModified;
+            RebuildMeshVisual();
+            UpdateCollider();
+        }
+
+        /// <summary>
+        /// 외부 밀도 데이터를 설정하고 시각적 메시만 재빌드한다 (콜라이더 지연).
+        /// 성능 최적화를 위해 콜라이더는 나중에 별도로 업데이트한다.
+        /// </summary>
+        public void SetDensitiesDeferred(float[,,] newDensities, float voxelSize, int chunkHeight, bool wasModified)
+        {
+            this.densities = newDensities;
+            this.voxelSize = voxelSize;
+            this.chunkHeight = chunkHeight;
+            this.isModified = wasModified;
+            RebuildMeshVisual();
+            // 콜라이더는 나중에 VoxelWorld에서 큐를 통해 업데이트
+        }
+
+        /// <summary>
+        /// 밀도 데이터를 복사하여 반환한다 (저장용).
+        /// </summary>
+        public float[,,] CopyDensities()
+        {
+            if (densities == null) return null;
+
+            int sizeX = densities.GetLength(0);
+            int sizeY = densities.GetLength(1);
+            int sizeZ = densities.GetLength(2);
+
+            float[,,] copy = new float[sizeX, sizeY, sizeZ];
+            System.Buffer.BlockCopy(densities, 0, copy, 0, sizeX * sizeY * sizeZ * sizeof(float));
+            return copy;
+        }
+
+        /// <summary>
+        /// 수정 플래그를 설정한다.
+        /// </summary>
+        public void SetModifiedFlag()
+        {
+            isModified = true;
+        }
+
+        /// <summary>
+        /// 밀도 데이터를 해제하여 메모리를 절약한다 (비활성화용).
+        /// </summary>
+        public void ClearDensities()
+        {
+            densities = null;
+        }
+
+        /// <summary>
+        /// 수정 플래그를 초기화한다.
+        /// </summary>
+        public void ResetModifiedFlag()
+        {
+            isModified = false;
+        }
+
+        // ==================== 경계 벽 관리 ====================
+
+        /// <summary>
+        /// 경계 벽 상태를 업데이트한다.
+        /// </summary>
+        /// <param name="needsMinX">-X 방향에 벽이 필요한지</param>
+        /// <param name="needsMaxX">+X 방향에 벽이 필요한지</param>
+        /// <param name="needsMinZ">-Z 방향에 벽이 필요한지</param>
+        /// <param name="needsMaxZ">+Z 방향에 벽이 필요한지</param>
+        public void UpdateWalls(bool needsMinX, bool needsMaxX, bool needsMinZ, bool needsMaxZ)
+        {
+            bool[] needs = { needsMinX, needsMaxX, needsMinZ, needsMaxZ };
+
+            for (int i = 0; i < 4; i++)
+            {
+                if (needs[i] && !hasWall[i])
+                {
+                    CreateWall(i);
+                    hasWall[i] = true;
+                }
+                else if (!needs[i] && hasWall[i])
+                {
+                    DestroyWall(i);
+                    hasWall[i] = false;
+                }
+            }
+        }
+
+        /// <summary>
+        /// 특정 방향의 벽을 생성한다.
+        /// </summary>
+        private void CreateWall(int direction)
+        {
+            if (densities == null) return;
+
+            float chunkWorldSize = chunkSize * voxelSize;
+            float maxHeight = chunkHeight * voxelSize;
+
+            // 벽 GameObject 생성
+            GameObject wallObj = new GameObject($"Wall_{direction}");
+            wallObj.transform.parent = transform;
+            wallObj.transform.localPosition = Vector3.zero;
+            wallObj.transform.localRotation = Quaternion.identity;
+
+            MeshFilter mf = wallObj.AddComponent<MeshFilter>();
+            MeshRenderer mr = wallObj.AddComponent<MeshRenderer>();
+            mr.material = meshRenderer.material;
+
+            // 벽 메시 생성
+            Mesh wallMesh = CreateWallMesh(direction, chunkWorldSize, maxHeight);
+            mf.sharedMesh = wallMesh;
+
+            wallObjects[direction] = wallObj;
+        }
+
+        /// <summary>
+        /// 벽 메시를 생성한다.
+        /// </summary>
+        private Mesh CreateWallMesh(int direction, float chunkWorldSize, float maxHeight)
+        {
+            Mesh mesh = new Mesh();
+            mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+
+            // 밀도 데이터에서 표면 높이 샘플링하여 벽 생성
+            int resolution = chunkSize + 1;
+            int vertexCount = resolution * 2;
+
+            Vector3[] vertices = new Vector3[vertexCount];
+            Vector3[] normals = new Vector3[vertexCount];
+            Color[] colors = new Color[vertexCount];
+            int[] triangles = new int[(resolution - 1) * 6];
+
+            Vector3 normal;
+            float xPos, zPos;
+
+            for (int i = 0; i < resolution; i++)
+            {
+                float t = (float)i / chunkSize;
+                float surfaceHeight = GetSurfaceHeightAtEdge(direction, i);
+
+                switch (direction)
+                {
+                    case 0: // MinX (-X 방향)
+                        xPos = 0;
+                        zPos = t * chunkWorldSize;
+                        normal = Vector3.left;
+                        break;
+                    case 1: // MaxX (+X 방향)
+                        xPos = chunkWorldSize;
+                        zPos = t * chunkWorldSize;
+                        normal = Vector3.right;
+                        break;
+                    case 2: // MinZ (-Z 방향)
+                        xPos = t * chunkWorldSize;
+                        zPos = 0;
+                        normal = Vector3.back;
+                        break;
+                    default: // MaxZ (+Z 방향)
+                        xPos = t * chunkWorldSize;
+                        zPos = chunkWorldSize;
+                        normal = Vector3.forward;
+                        break;
+                }
+
+                // 상단 정점 (표면)
+                vertices[i * 2] = new Vector3(xPos, surfaceHeight, zPos);
+                normals[i * 2] = normal;
+
+                // 하단 정점 (바닥)
+                vertices[i * 2 + 1] = new Vector3(xPos, 0, zPos);
+                normals[i * 2 + 1] = normal;
+
+                // 색상 (높이 기반)
+                colors[i * 2] = GetColorForHeight(surfaceHeight / maxHeight);
+                colors[i * 2 + 1] = GetColorForHeight(0);
+            }
+
+            // 삼각형 생성
+            int triIdx = 0;
+            for (int i = 0; i < resolution - 1; i++)
+            {
+                int v0 = i * 2;
+                int v1 = i * 2 + 1;
+                int v2 = (i + 1) * 2;
+                int v3 = (i + 1) * 2 + 1;
+
+                // 법선 방향에 따라 와인딩 조정
+                if (direction == 0 || direction == 2) // MinX, MinZ
+                {
+                    triangles[triIdx++] = v0;
+                    triangles[triIdx++] = v2;
+                    triangles[triIdx++] = v1;
+                    triangles[triIdx++] = v1;
+                    triangles[triIdx++] = v2;
+                    triangles[triIdx++] = v3;
+                }
+                else // MaxX, MaxZ
+                {
+                    triangles[triIdx++] = v0;
+                    triangles[triIdx++] = v1;
+                    triangles[triIdx++] = v2;
+                    triangles[triIdx++] = v1;
+                    triangles[triIdx++] = v3;
+                    triangles[triIdx++] = v2;
+                }
+            }
+
+            mesh.vertices = vertices;
+            mesh.normals = normals;
+            mesh.colors = colors;
+            mesh.triangles = triangles;
+
+            return mesh;
+        }
+
+        /// <summary>
+        /// 경계에서 표면 높이를 가져온다.
+        /// </summary>
+        private float GetSurfaceHeightAtEdge(int direction, int index)
+        {
+            if (densities == null) return 0;
+
+            int sizeY = densities.GetLength(1);
+            int x, z;
+
+            switch (direction)
+            {
+                case 0: x = 0; z = index; break;  // MinX
+                case 1: x = chunkSize; z = index; break;  // MaxX
+                case 2: x = index; z = 0; break;  // MinZ
+                default: x = index; z = chunkSize; break;  // MaxZ
+            }
+
+            // Y축으로 표면 찾기 (밀도가 양수→음수로 전환되는 지점)
+            for (int y = sizeY - 1; y > 0; y--)
+            {
+                if (densities[x, y, z] > 0)
+                {
+                    // 보간하여 정확한 표면 높이 계산
+                    float d0 = densities[x, y, z];
+                    float d1 = densities[x, y + 1 < sizeY ? y + 1 : y, z];
+
+                    if (d1 < 0)
+                    {
+                        float t = d0 / (d0 - d1);
+                        return (y + t) * voxelSize;
+                    }
+                    return y * voxelSize;
+                }
+            }
+
+            return 0;
+        }
+
+        /// <summary>
+        /// 높이 비율에 따른 색상을 반환한다.
+        /// </summary>
+        private Color GetColorForHeight(float heightRatio)
+        {
+            Color dirt = new Color(0.55f, 0.38f, 0.20f);
+            Color grass = new Color(0.30f, 0.55f, 0.18f);
+            Color rock = new Color(0.50f, 0.48f, 0.45f);
+            Color sand = new Color(0.76f, 0.70f, 0.50f);
+
+            if (heightRatio < 0.05f) return sand;
+            if (heightRatio < 0.3f) return Color.Lerp(dirt, grass, (heightRatio - 0.05f) / 0.25f);
+            if (heightRatio < 0.6f) return grass;
+            if (heightRatio < 0.8f) return Color.Lerp(grass, rock, (heightRatio - 0.6f) / 0.2f);
+            return rock;
+        }
+
+        /// <summary>
+        /// 특정 방향의 벽을 제거한다.
+        /// </summary>
+        private void DestroyWall(int direction)
+        {
+            if (wallObjects[direction] != null)
+            {
+                // 메시 해제
+                MeshFilter mf = wallObjects[direction].GetComponent<MeshFilter>();
+                if (mf != null && mf.sharedMesh != null)
+                {
+                    Destroy(mf.sharedMesh);
+                }
+                Destroy(wallObjects[direction]);
+                wallObjects[direction] = null;
+            }
+        }
+
+        /// <summary>
+        /// 모든 벽을 제거한다.
+        /// </summary>
+        public void ClearAllWalls()
+        {
+            for (int i = 0; i < 4; i++)
+            {
+                if (hasWall[i])
+                {
+                    DestroyWall(i);
+                    hasWall[i] = false;
+                }
+            }
+        }
 
         private void ApplyVertexColors(Mesh mesh)
         {
@@ -220,6 +558,8 @@ namespace VoxelTerrain
         {
             if (persistentMesh != null)
                 Destroy(persistentMesh);
+
+            ClearAllWalls();
         }
     }
 }
