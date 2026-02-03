@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet --list-sdks:*)",
+      "Bash(claude mcp:*)",
+      "Bash(dir /s /b \"%APPDATA%\\\\claude*\")",
+      "mcp__ai-game-developer__console-get-logs",
+      "mcp__ai-game-developer__package-add",
+      "mcp__ai-game-developer__assets-refresh",
+      "mcp__ai-game-developer__package-search",
+      "mcp__ai-game-developer__package-list",
+      "mcp__ai-game-developer__assets-material-create",
+      "mcp__ai-game-developer__gameobject-create",
+      "mcp__ai-game-developer__gameobject-component-add",
+      "mcp__ai-game-developer__assets-prefab-create",
+      "mcp__ai-game-developer__assets-create-folder",
+      "mcp__ai-game-developer__gameobject-component-get",
+      "mcp__ai-game-developer__gameobject-component-modify",
+      "mcp__ai-game-developer__scene-save",
+      "mcp__ai-game-developer__gameobject-modify",
+      "mcp__ai-game-developer__gameobject-find",
+      "mcp__ai-game-developer__gameobject-destroy",
+      "Bash(tasklist:*)",
+      "Bash(.unity-mcp-server.exe)",
+      "Bash(dir:*)",
+      "mcp__sequential-thinking__sequentialthinking",
+      "WebFetch(domain:gamedevacademy.org)",
+      "WebFetch(domain:medium.com)",
+      "Bash(find:*)",
+      "Bash(tree:*)",
+      "mcp__ai-game-developer__gameobject-component-list-all",
+      "mcp__ai-game-developer__assets-find",
+      "mcp__ai-game-developer__editor-application-set-state",
+      "mcp__ai-game-developer__editor-application-get-state"
+    ]
+  }
+}
