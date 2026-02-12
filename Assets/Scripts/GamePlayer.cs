@@ -32,10 +32,6 @@ public class GamePlayer : NetworkBehaviour
             playerCamera.tag = "MainCamera";
             playerCamera.farClipPlane = 1000f;
 
-            // 카메라를 플레이어 눈높이로 리셋 (CharacterController 높이 2m 기준)
-            playerCamera.transform.localPosition = Vector3.up * 10f;
-            playerCamera.transform.localRotation = Quaternion.identity;
-
             AudioListener listener = playerCamera.GetComponent<AudioListener>();
             if (listener != null) listener.enabled = true;
 
@@ -44,9 +40,8 @@ public class GamePlayer : NetworkBehaviour
                 playerCamera.gameObject.AddComponent<VoxelEditor>();
         }
 
-        // === 로컬 플레이어 외형 숨김 (1인칭) ===
-        MeshRenderer mr = GetComponent<MeshRenderer>();
-        if (mr != null) mr.enabled = false;
+        // === 로컬 플레이어 외형 (아이소메트릭 뷰에서는 보여야 함) ===
+        // MeshRenderer는 활성 상태 유지
 
         // === CapsuleCollider → CharacterController 교체 (지면 이동용) ===
         Collider col = GetComponent<Collider>();
@@ -55,13 +50,13 @@ public class GamePlayer : NetworkBehaviour
         CharacterController cc = gameObject.AddComponent<CharacterController>();
         cc.height = 2f;
         cc.radius = 0.4f;
-        cc.center = new Vector3(0, 1f, 0);
+        cc.center = Vector3.zero;
         cc.stepOffset = 0.5f;
         cc.slopeLimit = 50f;
 
-        // === FPS 카메라 컨트롤러 추가 ===
-        if (GetComponent<FPSCameraController>() == null)
-            gameObject.AddComponent<FPSCameraController>();
+        // === 아이소메트릭 카메라 컨트롤러 추가 ===
+        if (GetComponent<IsometricCameraController>() == null)
+            gameObject.AddComponent<IsometricCameraController>();
 
         // === 시작 위치 ===
         transform.position = new Vector3(0, startHeight, 0);
