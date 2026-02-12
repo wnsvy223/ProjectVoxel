@@ -7,8 +7,7 @@ namespace VoxelTerrain
     /// <summary>
     /// 무한 복셀 월드 매니저.
     /// 플레이어 위치 기반으로 청크를 동적으로 생성/언로드한다.
-    /// 성능 최적화: 시간 기반 예산 시스템.
-    /// 틈 방지: 밀도+메시 통합 처리 + 인접 청크 즉시 업데이트.
+    /// 블로그(jgallant) Part 1~4 노이즈 시스템 통합.
     /// </summary>
     public class VoxelWorld : MonoBehaviour
     {
@@ -38,14 +37,18 @@ namespace VoxelTerrain
         [Range(5f, 80f)]
         public float terrainAmplitude = 35f;
 
-        [Header("동굴 설정 (현재 비활성)")]
-        [Tooltip("동굴 노이즈 주파수")]
-        [Range(0.01f, 0.1f)]
-        public float caveFrequency = 0.03f;
+        [Header("바이옴 설정 (블로그 Part 3~4)")]
+        [Tooltip("온도 노이즈 주파수 (낮을수록 넓은 온도 구역)")]
+        [Range(0.001f, 0.02f)]
+        public float heatFrequency = 0.005f;
 
-        [Tooltip("동굴 임계값")]
-        [Range(0.1f, 0.8f)]
-        public float caveThreshold = 0.35f;
+        [Tooltip("습도 노이즈 주파수 (낮을수록 넓은 습도 구역)")]
+        [Range(0.001f, 0.02f)]
+        public float moistureFrequency = 0.005f;
+
+        [Tooltip("해수면 높이 (복셀 단위, chunkHeight의 비율로 설정)")]
+        [Range(0.1f, 0.5f)]
+        public float seaLevelRatio = 0.35f;
 
         [Header("머티리얼")]
         [Tooltip("버텍스 컬러 머티리얼 (VertexColorTerrain 셰이더)")]
@@ -83,9 +86,10 @@ namespace VoxelTerrain
 
         // 수정된 청크 데이터 저장소
         private Dictionary<Vector2Int, float[,,]> savedChunkData = new Dictionary<Vector2Int, float[,,]>();
+        private Dictionary<Vector2Int, ColumnBiomeInfo[,]> savedBiomeData = new Dictionary<Vector2Int, ColumnBiomeInfo[,]>();
         private HashSet<Vector2Int> modifiedChunks = new HashSet<Vector2Int>();
 
-        // 청크 생성 큐 (밀도+메시 통합)
+        // 청크 생성 큐
         private Queue<Vector2Int> chunkQueue = new Queue<Vector2Int>();
         private HashSet<Vector2Int> pendingChunks = new HashSet<Vector2Int>();
 
@@ -125,7 +129,6 @@ namespace VoxelTerrain
 
         void LateUpdate()
         {
-            // 지형 편집으로 인한 메시 업데이트 (즉시)
             if (dirtyMeshChunks.Count > 0)
             {
                 foreach (var chunk in dirtyMeshChunks)
@@ -145,13 +148,11 @@ namespace VoxelTerrain
         {
             frameStopwatch.Restart();
 
-            // 청크 생성 (밀도+메시 통합 - 한 프레임에 하나씩)
             if (chunkQueue.Count > 0 && frameStopwatch.ElapsedMilliseconds < frameBudgetMs)
             {
                 ProcessOneChunkCreation();
             }
 
-            // 언로드 (가벼움)
             while (unloadQueue.Count > 0 && frameStopwatch.ElapsedMilliseconds < frameBudgetMs)
             {
                 ProcessOneUnload();
@@ -167,7 +168,6 @@ namespace VoxelTerrain
 
             if (chunks.ContainsKey(coord)) return;
 
-            // === 1. GameObject 생성 ===
             Vector3 chunkPosition = ChunkCoordToWorldPos(coord);
             GameObject chunkObj = new GameObject($"Chunk_{coord.x}_{coord.y}");
             chunkObj.transform.parent = transform;
@@ -180,42 +180,37 @@ namespace VoxelTerrain
             VoxelChunk chunk = chunkObj.AddComponent<VoxelChunk>();
             chunk.Initialize(terrainMaterial);
 
-            // 먼저 딕셔너리에 추가 (인접 청크 판단을 위해)
             chunks[coord] = chunk;
 
-            // === 2. 밀도 계산 + 메시 빌드 (통합) ===
-            if (savedChunkData.TryGetValue(coord, out float[,,] savedData))
+            if (savedChunkData.TryGetValue(coord, out float[,,] savedDensity))
             {
-                // 저장된 데이터 복원
-                chunk.BuildMeshDeferred(savedData, voxelSize, chunkHeight);
+                ColumnBiomeInfo[,] savedBiome = null;
+                savedBiomeData.TryGetValue(coord, out savedBiome);
+
+                chunk.BuildMeshDeferred(savedDensity, savedBiome, voxelSize, chunkHeight);
                 chunk.SetModifiedFlag();
                 savedChunkData.Remove(coord);
+                savedBiomeData.Remove(coord);
             }
             else
             {
-                // 새 지형 생성 - isEdge 플래그는 사용하지 않음 (노이즈 기반 연속 밀도)
-                // 노이즈가 같은 월드 좌표에서 같은 값을 반환하므로 경계가 자연스럽게 일치
-                float[,,] densities = VoxelData.GenerateDensityField(
+                // 새 지형 생성: 바이옴 포함
+                float seaLevel = chunkHeight * seaLevelRatio;
+                var result = VoxelData.GenerateChunkData(
                     chunkSize, chunkHeight,
                     coord.x * chunkSize, coord.y * chunkSize,
-                    seed, terrainFrequency, caveFrequency, caveThreshold, terrainAmplitude,
-                    false, false, false, false  // isEdge 플래그 모두 false
-                );
+                    seed, terrainFrequency, terrainAmplitude,
+                    heatFrequency, moistureFrequency, seaLevel);
 
-                chunk.BuildMeshDeferred(densities, voxelSize, chunkHeight);
+                chunk.BuildMeshDeferred(result.Densities, result.BiomeMap, voxelSize, chunkHeight);
             }
 
-            // 콜라이더 큐에 추가
             AddToColliderQueue(chunk);
 
-            // === 3. 벽 상태 업데이트 ===
             UpdateChunkWalls(coord);
             UpdateAdjacentChunkWalls(coord);
         }
 
-        /// <summary>
-        /// 청크의 벽 상태를 업데이트한다 (인접 청크 존재 여부에 따라).
-        /// </summary>
         private void UpdateChunkWalls(Vector2Int coord)
         {
             if (!chunks.TryGetValue(coord, out VoxelChunk chunk)) return;
@@ -228,9 +223,6 @@ namespace VoxelTerrain
             chunk.UpdateWalls(needsMinX, needsMaxX, needsMinZ, needsMaxZ);
         }
 
-        /// <summary>
-        /// 인접 청크들의 벽 상태를 업데이트한다.
-        /// </summary>
         private void UpdateAdjacentChunkWalls(Vector2Int coord)
         {
             Vector2Int[] adjacentCoords = new Vector2Int[]
@@ -252,7 +244,6 @@ namespace VoxelTerrain
             Vector2Int coord = unloadQueue.Dequeue();
             if (!chunks.TryGetValue(coord, out VoxelChunk chunk)) return;
 
-            // 수정된 청크 데이터 저장
             if (modifiedChunks.Contains(coord) || chunk.IsModified)
             {
                 float[,,] dataCopy = chunk.CopyDensities();
@@ -260,6 +251,12 @@ namespace VoxelTerrain
                 {
                     savedChunkData[coord] = dataCopy;
                     modifiedChunks.Add(coord);
+                }
+
+                var biomeMap = chunk.GetBiomeMap();
+                if (biomeMap != null)
+                {
+                    savedBiomeData[coord] = biomeMap;
                 }
             }
 
@@ -270,7 +267,6 @@ namespace VoxelTerrain
             Destroy(chunk.gameObject);
             chunks.Remove(coord);
 
-            // 인접 청크의 벽 상태 업데이트 (언로드된 방향에 벽 필요)
             UpdateAdjacentChunkWalls(coord);
         }
 
@@ -301,7 +297,6 @@ namespace VoxelTerrain
             if (currentChunk == lastPlayerChunk) return;
             lastPlayerChunk = currentChunk;
 
-            // 필요한 청크 수집 및 거리순 정렬
             List<Vector2Int> neededChunks = new List<Vector2Int>();
             for (int dx = -viewDistance; dx <= viewDistance; dx++)
             {
@@ -315,7 +310,6 @@ namespace VoxelTerrain
                 }
             }
 
-            // 거리순 정렬 (가까운 것 먼저)
             neededChunks.Sort((a, b) =>
             {
                 int distA = Mathf.Abs(a.x - currentChunk.x) + Mathf.Abs(a.y - currentChunk.y);
@@ -329,7 +323,6 @@ namespace VoxelTerrain
                 pendingChunks.Add(coord);
             }
 
-            // 언로드 대상
             int unloadDistance = viewDistance + unloadBuffer;
             foreach (var kvp in chunks)
             {
@@ -358,10 +351,8 @@ namespace VoxelTerrain
             playerTransform = player;
             lastPlayerChunk = new Vector2Int(int.MinValue, int.MinValue);
 
-            // 플레이어 바로 아래 청크들 즉시 동기 생성 (단순화: 노이즈 기반 연속 밀도)
-            // 5x5 = 25개 청크만 동기 생성 (성능 최적화), 나머지는 비동기 큐
             Vector2Int currentChunk = WorldToChunkCoord(player.position);
-            const int initialRadius = 2; // 5x5 청크 (-2 ~ +2)
+            const int initialRadius = 2;
 
             for (int dx = -initialRadius; dx <= initialRadius; dx++)
             {
@@ -375,17 +366,12 @@ namespace VoxelTerrain
                 }
             }
 
-            // 모든 초기 청크의 벽 상태 업데이트
             UpdateAllInitialWalls(currentChunk, initialRadius);
 
-            // 나머지는 큐에 추가
             lastPlayerChunk = currentChunk;
             QueueChunksAroundPlayer();
         }
 
-        /// <summary>
-        /// 청크를 즉시 생성한다 (플레이어 초기 위치용).
-        /// </summary>
         private void CreateChunkImmediate(Vector2Int coord)
         {
             Vector3 chunkPosition = ChunkCoordToWorldPos(coord);
@@ -402,21 +388,16 @@ namespace VoxelTerrain
 
             chunks[coord] = chunk;
 
-            // 노이즈 기반 밀도 생성 (isEdge 사용 안 함)
-            float[,,] densities = VoxelData.GenerateDensityField(
+            float seaLevel = chunkHeight * seaLevelRatio;
+            var result = VoxelData.GenerateChunkData(
                 chunkSize, chunkHeight,
                 coord.x * chunkSize, coord.y * chunkSize,
-                seed, terrainFrequency, caveFrequency, caveThreshold, terrainAmplitude,
-                false, false, false, false
-            );
+                seed, terrainFrequency, terrainAmplitude,
+                heatFrequency, moistureFrequency, seaLevel);
 
-            chunk.BuildMesh(densities, voxelSize, chunkHeight);
+            chunk.BuildMesh(result.Densities, result.BiomeMap, voxelSize, chunkHeight);
         }
 
-        /// <summary>
-        /// 초기 청크들의 벽 상태를 일괄 업데이트한다.
-        /// SetPlayer()에서 모든 초기 청크 생성 후 호출.
-        /// </summary>
         private void UpdateAllInitialWalls(Vector2Int centerChunk, int radius)
         {
             for (int dx = -radius; dx <= radius; dx++)
@@ -491,6 +472,7 @@ namespace VoxelTerrain
         public void ClearSavedData()
         {
             savedChunkData.Clear();
+            savedBiomeData.Clear();
             modifiedChunks.Clear();
         }
 
